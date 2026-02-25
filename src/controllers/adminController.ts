@@ -312,3 +312,132 @@ export const generateBatch = async (req: Request, res: Response) => {
         }
     }
 };
+
+
+
+export const getAllActiveTags = async (req: Request, res: Response) => {
+    try {
+        const tags = await prisma.tag.findMany({
+            where: {
+                status: 'ACTIVE'
+            },
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                        phoneNumber: true,
+                        avatar: true
+                    }
+                },
+                carProfile: true,
+                kidProfile: true,
+                petProfile: true,
+            },
+            orderBy: {
+                createdAt: 'desc'
+            }
+        });
+        res.status(200).json(tags);
+    } catch (error) {
+        console.error('Error fetching all active tags:', error);
+        res.status(500).json({ message: 'Server error fetching tags', error });
+    }
+};
+
+
+export const getTagsByType = async (req: Request, res: Response) => {
+    try {
+        const { type } = req.params;
+        const validTypes = ['CAR', 'KID', 'PET'];
+
+
+        if (!validTypes.includes(type.toUpperCase())) {
+            return res.status(400).json({ message: 'Invalid domain type' });
+        }
+
+
+        const tags = await prisma.tag.findMany({
+            where: {
+                domainType: type.toUpperCase() as any,
+                status: 'ACTIVE'
+            },
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                        phoneNumber: true,
+                        avatar: true
+                    }
+                },
+                carProfile: true,
+                kidProfile: true,
+                petProfile: true,
+            },
+            orderBy: {
+                createdAt: 'desc'
+            }
+        });
+        res.status(200).json(tags);
+    } catch (error) {
+        console.error(`Error fetching tags of type ${req.params.type}:`, error);
+        res.status(500).json({ message: 'Server error fetching tags by type', error });
+    }
+};
+
+
+export const updateTag = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const updates = req.body;
+
+
+        // Prevent updating ID or domainType
+        const { id: _, domainType: __, userId: ___, user: ____, ...allowedUpdates } = updates;
+
+
+        const updatedTag = await prisma.tag.update({
+            where: { id },
+            data: allowedUpdates,
+            include: {
+                carProfile: true,
+                kidProfile: true,
+                petProfile: true,
+            }
+        });
+
+
+        res.status(200).json({ message: 'Tag updated successfully', tag: updatedTag });
+    } catch (error: any) {
+        console.error(`Error updating tag ${req.params.id}:`, error);
+        if (error.code === 'P2025') {
+            return res.status(404).json({ message: 'Tag not found' });
+        }
+        res.status(500).json({ message: 'Server error updating tag', error });
+    }
+};
+
+
+export const deleteTag = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+
+
+        await prisma.tag.delete({
+            where: { id }
+        });
+
+
+        res.status(200).json({ message: 'Tag deleted successfully' });
+    } catch (error: any) {
+        console.error(`Error deleting tag ${req.params.id}:`, error);
+        if (error.code === 'P2025') {
+            return res.status(404).json({ message: 'Tag not found' });
+        }
+        res.status(500).json({ message: 'Server error deleting tag', error });
+    }
+};
+
