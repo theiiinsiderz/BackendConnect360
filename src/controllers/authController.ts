@@ -60,3 +60,37 @@ export const verifyOtp = async (req: Request, res: Response) => {
         res.status(500).json({ message: 'Server error', error });
     }
 };
+
+export const adminLogin = async (req: Request, res: Response) => {
+    try {
+        const { phoneNumber } = req.body;
+
+        if (!phoneNumber) {
+            return res.status(400).json({ message: 'Phone number is required' });
+        }
+
+        const user = await prisma.user.findUnique({
+            where: { phoneNumber }
+        });
+
+        if (!user || user.role !== 'ADMIN') {
+            return res.status(403).json({ message: 'Admin access required' });
+        }
+
+        const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+        const token = jwt.sign(
+            { id: user.id, role: user.role },
+            JWT_SECRET,
+            { expiresIn: '7d' }
+        );
+
+        return res.status(200).json({
+            message: 'Login successful',
+            token,
+            user
+        });
+    } catch (error) {
+        console.error('Admin Login Error:', error);
+        return res.status(500).json({ message: 'Server error', error });
+    }
+};

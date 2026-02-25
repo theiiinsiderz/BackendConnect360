@@ -40,7 +40,7 @@ export const authorizeAdmin = async (req: Request, res: Response, next: NextFunc
             where: { id: req.user.id }
         });
 
-        if (user && user.role === 'admin') {
+        if (user && user.role === 'ADMIN') {
             next();
         } else {
             res.status(403).json({ message: 'Admin access required' });

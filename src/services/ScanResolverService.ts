@@ -1,6 +1,17 @@
-import { DomainType, Tag as ITag, PrismaClient, TagStatus } from '@prisma/client';
+import prisma from '../prisma';
 
-const prisma = new PrismaClient();
+type DomainType = 'CAR' | 'BIKE' | 'PET' | 'KID';
+type TagStatus = 'MINTED' | 'UNCLAIMED' | 'ACTIVE' | 'SUSPENDED' | 'REVOKED';
+
+type TagRecord = {
+    id: string;
+    code: string;
+    domainType: DomainType;
+    status: TagStatus;
+    allowMaskedCall: boolean;
+    allowWhatsapp: boolean;
+    allowSms: boolean;
+};
 
 // Defined shape of the Phase 2 API contract to be shaped by Phase 1 backend rules
 export interface ScanResult {
@@ -32,7 +43,7 @@ export class ScanResolverService {
         };
 
         // If the tag is not ready/active, we don't fetch the domain payload to save DB cycles
-        if (tag.status !== TagStatus.ACTIVE) {
+        if (tag.status !== 'ACTIVE') {
             return { metadata };
         }
 
@@ -48,13 +59,13 @@ export class ScanResolverService {
     /**
      * Domain Delegation: Hard switch enforcing schema isolation
      */
-    private static async delegateToDomain(tag: ITag) {
+    private static async delegateToDomain(tag: TagRecord) {
         switch (tag.domainType) {
-            case DomainType.CAR:
+            case 'CAR':
                 return this.resolveCar(tag);
-            case DomainType.KID:
+            case 'KID':
                 return this.resolveKid(tag);
-            case DomainType.PET:
+            case 'PET':
                 return this.resolvePet(tag);
             default:
                 throw new Error(`UNKNOWN_DOMAIN_TYPE: ${tag.domainType}`);
@@ -64,12 +75,12 @@ export class ScanResolverService {
     /**
      * Gate 4: Privacy & Hydration for Cars
      */
-    private static async resolveCar(tag: ITag) {
+    private static async resolveCar(tag: TagRecord) {
         const profile = await prisma.carProfile.findUnique({ where: { tagId: tag.id } });
         if (!profile) throw new Error('CAR_PROFILE_MISSING');
 
         // MASK DATA BEFORE RETURNING (Phase 1 Security rules)
-        const maskedPlate = profile.plateNumber.replace(/.(?=.{4})/g, '*');
+        const maskedPlate = profile.vehicleNumber.replace(/.(?=.{4})/g, '*');
 
         const actions = [];
         if (tag.allowMaskedCall) {
@@ -93,7 +104,7 @@ export class ScanResolverService {
     /**
      * Gate 4: Privacy & Hydration for Kids
      */
-    private static async resolveKid(tag: ITag) {
+    private static async resolveKid(tag: TagRecord) {
         const profile = await prisma.kidProfile.findUnique({ where: { tagId: tag.id } });
         if (!profile) throw new Error('KID_PROFILE_MISSING');
 
@@ -121,7 +132,7 @@ export class ScanResolverService {
     /**
      * Gate 4: Privacy & Hydration for Pets
      */
-    private static async resolvePet(tag: ITag) {
+    private static async resolvePet(tag: TagRecord) {
         const profile = await prisma.petProfile.findUnique({ where: { tagId: tag.id } });
         if (!profile) throw new Error('PET_PROFILE_MISSING');
 

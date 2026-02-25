@@ -1,7 +1,8 @@
-import { DomainType } from '@prisma/client';
 import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import prisma from '../prisma';
+
+type DomainType = 'CAR' | 'BIKE' | 'PET' | 'KID';
 
 // ── GET /tags ── List authenticated user's tags ──
 export const getTags = async (req: Request, res: Response) => {
@@ -21,7 +22,7 @@ export const getTags = async (req: Request, res: Response) => {
         });
 
         // Map to frontend expectation while adhering to backend architecture
-        const formattedTags = tags.map(tag => {
+        const formattedTags = tags.map((tag: any) => {
             let config = {};
             if (tag.domainType === 'CAR') config = tag.carProfile || {};
             if (tag.domainType === 'KID') config = tag.kidProfile || {};
@@ -44,7 +45,7 @@ export const getTags = async (req: Request, res: Response) => {
 // ── POST /tags ── Create a brand-new tag (manual entry) ──
 export const createTag = async (req: Request, res: Response) => {
     try {
-        const { code, nickname, domainType } = req.body;
+        const { code, nickname, domainType, companyId } = req.body;
 
         const existingTag = await prisma.tag.findUnique({ where: { code } });
         // @ts-ignore
@@ -72,18 +73,48 @@ export const createTag = async (req: Request, res: Response) => {
         // Phase 1 Rules: domainType is locked at creation
         const selectedDomain: DomainType = domainType || 'CAR';
 
+        let resolvedCompanyId: string;
+        if (typeof companyId === 'string' && companyId.trim()) {
+            const company = await prisma.company.findUnique({
+                where: { id: companyId.trim() },
+                select: { id: true }
+            });
+
+            if (!company) {
+                return res.status(400).json({ message: 'Invalid companyId' });
+            }
+
+            resolvedCompanyId = company.id;
+        } else {
+            const existingCompany = await prisma.company.findFirst({
+                select: { id: true },
+                orderBy: { createdAt: 'asc' }
+            });
+
+            if (existingCompany) {
+                resolvedCompanyId = existingCompany.id;
+            } else {
+                const createdCompany = await prisma.company.create({
+                    data: { name: 'Connect360 Default Company' },
+                    select: { id: true }
+                });
+                resolvedCompanyId = createdCompany.id;
+            }
+        }
+
         const newTag = await prisma.tag.create({
             data: {
                 code,
                 nickname,
                 userId,
+                companyId: resolvedCompanyId,
                 domainType: selectedDomain,
                 status: 'ACTIVE',
             },
         });
 
         // Initialize appropriate profile
-        if (selectedDomain === 'CAR') await prisma.carProfile.create({ data: { tagId: newTag.id, plateNumber: '' } });
+        if (selectedDomain === 'CAR') await prisma.carProfile.create({ data: { tagId: newTag.id, vehicleNumber: '' } });
         if (selectedDomain === 'KID') await prisma.kidProfile.create({ data: { tagId: newTag.id, displayName: '', primaryGuardian: {} } });
         if (selectedDomain === 'PET') await prisma.petProfile.create({ data: { tagId: newTag.id, petName: '', ownerContact: {} } });
 
@@ -205,8 +236,8 @@ export const activateTagVerifyOtp = async (req: Request, res: Response) => {
         if (tag.domainType === 'CAR') {
             await prisma.carProfile.upsert({
                 where: { tagId: tag.id },
-                create: { tagId: tag.id, plateNumber: tagIdentifier },
-                update: { plateNumber: tagIdentifier }
+                create: { tagId: tag.id, vehicleNumber: tagIdentifier },
+                update: { vehicleNumber: tagIdentifier }
             });
         } else if (tag.domainType === 'KID') {
             await prisma.kidProfile.upsert({
