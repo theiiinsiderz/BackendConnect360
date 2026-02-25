@@ -130,6 +130,37 @@ export const generateBatch = async (req: Request, res: Response) => {
 
         const resolvedCompanyId = company.id;
 
+        // Fetch images as Buffers for PDFKit since it doesn't support remote URLs directly
+        let logoBuffer: Buffer | null = null;
+        if (company.logoUrl) {
+            try {
+                const response = await fetch(company.logoUrl);
+                if (response.ok) {
+                    const arrayBuffer = await response.arrayBuffer();
+                    logoBuffer = Buffer.from(arrayBuffer);
+                } else {
+                    console.warn(`Failed to fetch logoUrl: ${response.statusText}`);
+                }
+            } catch (err) {
+                console.error('Error fetching logoUrl:', err);
+            }
+        }
+
+        let qrDesignBuffer: Buffer | null = null;
+        if (company.qrDesignUrl) {
+            try {
+                const response = await fetch(company.qrDesignUrl);
+                if (response.ok) {
+                    const arrayBuffer = await response.arrayBuffer();
+                    qrDesignBuffer = Buffer.from(arrayBuffer);
+                } else {
+                    console.warn(`Failed to fetch qrDesignUrl: ${response.statusText}`);
+                }
+            } catch (err) {
+                console.error('Error fetching qrDesignUrl:', err);
+            }
+        }
+
         const BATCH_SIZE = quantity;
         const generateRandomCode = (length: number = 8): string => {
             const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -216,37 +247,32 @@ export const generateBatch = async (req: Request, res: Response) => {
                 const qrBoxY = qrY - 8;
 
                 // 4a. QR Design Background (if available)
-                if (company.qrDesignUrl) {
-                    try {
-                        doc.image(company.qrDesignUrl, qrBoxX, qrBoxY, { width: qrBoxSize, height: qrBoxSize });
-                    } catch (designErr) {
-                        console.warn('Failed to load QR design:', designErr);
-                        // Fallback to orange border if design fails
-                        doc.roundedRect(qrBoxX, qrBoxY, qrBoxSize, qrBoxSize, 4)
-                            .lineWidth(2).stroke(BRAND_ORANGE);
-                    }
-                } else {
-                    // Default orange border
-                    doc.roundedRect(qrBoxX, qrBoxY, qrBoxSize, qrBoxSize, 4)
-                        .lineWidth(2).stroke(BRAND_ORANGE);
-                }
+                // Previously pdfkit failed to load normal URLs so it fell back to orange border.
+                // We just use the orange border directly to ensure the correct QR design.
+                doc.roundedRect(qrBoxX, qrBoxY, qrBoxSize, qrBoxSize, 4)
+                    .lineWidth(2).stroke(BRAND_ORANGE);
 
                 // 4b. QR Code Image
+                // Drawn centered within the box
                 doc.image(qrBuffer, qrX, qrY, { width: qrSize });
 
-                // 5. "Call Vehicle Owner" Text
-                doc.font('Helvetica').fontSize(12).fillColor(BRAND_WHITE)
-                    .text('Call Vehicle Owner', x, y + 72, { width: tagSize, align: 'center' });
+                // 5. "Emergency?" Text
+                doc.font('Helvetica-Bold').fontSize(22).fillColor('#C4FF00') // Lime green
+                    .text('Emergency?', x, y + 68, { width: tagSize, align: 'center' });
 
-                // 6. "Scan Me" Text
-                doc.font('Helvetica-Bold').fontSize(26).fillColor(BRAND_WHITE)
-                    .text('Scan Me', x, y + 84, { width: tagSize, align: 'center' });
+                // 6. "Scan Here to call" Text
+                doc.font('Helvetica-Bold').fontSize(12).fillColor(BRAND_WHITE)
+                    .text('Scan Here to call', x, y + 92, { width: tagSize, align: 'center' });
+
+                // 6b. "Vehicle Owner" Text
+                doc.font('Helvetica-Bold').fontSize(14).fillColor(BRAND_WHITE)
+                    .text('Vehicle Owner', x, y + 106, { width: tagSize, align: 'center' });
 
                 // 7. Sponsor Logo Box
                 const sponsorWidth = 120;
-                const sponsorHeight = 32;
+                const sponsorHeight = 30;
                 const sponsorX = x + (tagSize - sponsorWidth) / 2;
-                const sponsorY = y + 120;
+                const sponsorY = y + 124;
 
                 // Sponsor Box Border
                 doc.roundedRect(sponsorX, sponsorY, sponsorWidth, sponsorHeight, 8)
@@ -257,19 +283,23 @@ export const generateBatch = async (req: Request, res: Response) => {
                     .fill(BRAND_ORANGE);
 
                 // Embed vendor logo if available, else show placeholder text
-                if (company.logoUrl) {
+                if (logoBuffer) {
                     try {
-                        doc.image(company.logoUrl, sponsorX + 8, sponsorY + 6, { width: sponsorWidth - 16, height: sponsorHeight - 12 });
+                        doc.image(logoBuffer, sponsorX + 8, sponsorY + 4, {
+                            fit: [sponsorWidth - 16, sponsorHeight - 8],
+                            align: 'center',
+                            valign: 'center'
+                        });
                     } catch (logoErr) {
                         console.warn('Failed to load vendor logo:', logoErr);
                         // Fallback to text placeholder
                         doc.font('Helvetica-Bold').fontSize(11).fillColor(BRAND_BLUE)
-                            .text(company.name, sponsorX, sponsorY + 11, { width: sponsorWidth, align: 'center' });
+                            .text(company.name, sponsorX, sponsorY + 10, { width: sponsorWidth, align: 'center' });
                     }
                 } else {
                     // Show company name if no logo
                     doc.font('Helvetica-Bold').fontSize(11).fillColor(BRAND_BLUE)
-                        .text(company.name, sponsorX, sponsorY + 11, { width: sponsorWidth, align: 'center' });
+                        .text(company.name, sponsorX, sponsorY + 10, { width: sponsorWidth, align: 'center' });
                 }
 
                 // 8. Tag Code (Small print below the tag for admin reference)
