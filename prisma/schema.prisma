@@ -1,0 +1,146 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider      = "prisma-client-js"
+  engineType    = "binary"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Phase 1 Enums
+enum DomainType {
+  CAR
+  KID
+  PET
+}
+
+enum TagStatus {
+  MINTED
+  UNCLAIMED
+  ACTIVE
+  SUSPENDED
+  REVOKED
+}
+
+model User {
+  id          String   @id @default(uuid())
+  phoneNumber String   @unique
+  name        String?
+  email       String?
+  avatar      String?
+  role        String   @default("user") // 'user', 'admin'
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tags        Tag[]
+  messages    Message[]
+  deviceToken DeviceToken?
+}
+
+// Phase 1: Base Tag (Immutable Rules)
+model Tag {
+  id       String  @id @default(uuid())
+  code     String  @unique
+  userId   String?
+  user     User?   @relation(fields: [userId], references: [id])
+  nickname String?
+
+  // Phase 1 Core fields
+  domainType DomainType @default(CAR)
+  status     TagStatus  @default(MINTED)
+
+  // One-to-One relations mapping to Domain Tables
+  carProfile CarProfile?
+  kidProfile KidProfile?
+  petProfile PetProfile?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Tag Privacy Toggles
+  allowMaskedCall      Boolean @default(false)
+  allowWhatsapp        Boolean @default(false)
+  allowSms             Boolean @default(false)
+  showEmergencyContact Boolean @default(false)
+
+  scans     Scan[]
+}
+
+// Phase 1: Polymorphic Domain Boundaries
+model CarProfile {
+  id    String @id @default(uuid())
+  tagId String @unique
+  tag   Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  vehicleType         String? @default("Coupe")
+  plateNumber         String
+  emergencyContacts   Json?
+  allowPoliceDispatch Boolean @default(false)
+}
+
+model KidProfile {
+  id    String @id @default(uuid())
+  tagId String @unique
+  tag   Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  displayName          String
+  primaryGuardian      Json
+  medicalAlerts        String?
+  requireLocationShare Boolean @default(true)
+}
+
+model PetProfile {
+  id    String @id @default(uuid())
+  tagId String @unique
+  tag   Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  petName      String
+  breedInfo    String?
+  vetContact   Json?
+  ownerContact Json
+}
+
+model Scan {
+  id        String   @id @default(uuid())
+  tagId     String
+  tag       Tag      @relation(fields: [tagId], references: [id])
+  location  String?
+  timestamp DateTime @default(now())
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  name        String
+  description String
+  price       Float
+  imageUrl    String
+  category    String   @default("car")
+  stock       Int      @default(0)
+  isActive    Boolean  @default(true)
+  features    String[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model DeviceToken {
+  ownerId   String   @id
+  user      User     @relation(fields: [ownerId], references: [id])
+  pushToken String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Message {
+  id         String   @id @default(uuid())
+  ownerId    String
+  user       User     @relation(fields: [ownerId], references: [id])
+  senderName String
+  message    String
+  isRead     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+}
