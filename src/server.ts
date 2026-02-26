@@ -750,6 +750,15 @@ app.get('/', (req, res) => {
     res.send('Connect360 Backend is Running! 🚀');
 });
 
+// Health Check Route
+app.get('/health', (req, res) => {
+    res.status(200).json({
+        status: 'ok',
+        service: 'Connect360 Backend',
+        timestamp: new Date().toISOString()
+    });
+});
+
 // Start Server
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT} `);
