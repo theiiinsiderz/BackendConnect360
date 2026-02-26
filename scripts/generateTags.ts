@@ -10,7 +10,7 @@ dotenv.config();
 // ── QR Code URL Configuration ──
 // QR codes encode a publicly accessible URL so that ANY QR scanner app
 // can open the tag's public scan page in a browser.
-const SCAN_BASE_URL = process.env.SCAN_BASE_URL || 'https://carcard.app';
+const SCAN_BASE_URL = process.env.SCAN_BASE_URL;
 
 // ── Parse Command Line Arguments ──
 // Usage: npx ts-node scripts/generateTags.ts [DOMAIN] [AMOUNT]
@@ -28,17 +28,6 @@ if (!isValidDomain(requestedDomainStr)) {
 }
 
 const domainType = DomainType[requestedDomainStr as keyof typeof DomainType];
-
-// ── SAFETY CHECK ──
-if (SCAN_BASE_URL === 'https://carcard.app' && BATCH_SIZE > 10) {
-    console.error('\n❌ ERROR: SCAN_BASE_URL is still set to the default "https://carcard.app".');
-    console.error('To avoid generating "dead" QR codes for production, please:');
-    console.error('1. Start your Cloudflare tunnel: "npm run cf-tunnel"');
-    console.error('2. Copy the resulting .trycloudflare.com URL');
-    console.error('3. Paste it into backend/.env as SCAN_BASE_URL');
-    console.error('Then run this script again.\n');
-    process.exit(1);
-}
 
 // ──────────────────────────────────────────────
 

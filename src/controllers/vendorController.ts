@@ -106,11 +106,6 @@ export const createVendor = async (req: Request, res: Response) => {
 export const updateVendor = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
-        const existing = await prisma.company.findUnique({ where: { id } });
-
-        if (!existing) {
-            return res.status(404).json({ message: 'Vendor not found' });
-        }
 
         const name = normalizeText(req.body?.name);
         const contactEmail = normalizeText(req.body?.contactEmail);
@@ -124,15 +119,19 @@ export const updateVendor = async (req: Request, res: Response) => {
         const vendor = await prisma.company.update({
             where: { id },
             data: {
-                name: name ?? existing.name,
-                contactEmail,
-                logoUrl: uploadedLogoUrl || existing.logoUrl,
-                qrDesignUrl: uploadedQrDesignUrl || existing.qrDesignUrl
+                ...(name ? { name } : {}),
+                ...(contactEmail ? { contactEmail } : {}),
+                ...(uploadedLogoUrl ? { logoUrl: uploadedLogoUrl } : {}),
+                ...(uploadedQrDesignUrl ? { qrDesignUrl: uploadedQrDesignUrl } : {})
             }
         });
 
         return res.status(200).json({ message: 'Vendor updated', vendor });
-    } catch (error) {
+    } catch (error: any) {
+        if (error?.code === 'P2025') {
+            return res.status(404).json({ message: 'Vendor not found' });
+        }
+
         console.error('Update vendor error:', error);
         return res.status(500).json({ message: 'Failed to update vendor' });
     }
@@ -141,16 +140,15 @@ export const updateVendor = async (req: Request, res: Response) => {
 export const deleteVendor = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
-        const existing = await prisma.company.findUnique({ where: { id } });
-
-        if (!existing) {
-            return res.status(404).json({ message: 'Vendor not found' });
-        }
 
         await prisma.company.delete({ where: { id } });
 
         return res.status(200).json({ message: 'Vendor deleted' });
     } catch (error: any) {
+        if (error?.code === 'P2025') {
+            return res.status(404).json({ message: 'Vendor not found' });
+        }
+
         if (error?.code === 'P2003') {
             return res.status(400).json({ message: 'Cannot delete vendor with linked tags' });
         }

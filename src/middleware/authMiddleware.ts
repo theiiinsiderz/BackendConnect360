@@ -12,6 +12,8 @@ declare global {
 }
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key'; // in prod use env
+const ADMIN_ROLE_CACHE_TTL_MS = 60_000;
+const adminRoleCache = new Map<string, { isAdmin: boolean; expiresAt: number }>();
 
 export const authenticateToken = (req: Request, res: Response, next: NextFunction) => {
     const authHeader = req.headers['authorization'];
@@ -36,11 +38,31 @@ export const authorizeAdmin = async (req: Request, res: Response, next: NextFunc
     }
 
     try {
+        const cacheKey = req.user.id as string;
+        const now = Date.now();
+        const cached = adminRoleCache.get(cacheKey);
+
+        if (cached && cached.expiresAt > now) {
+            if (cached.isAdmin) {
+                next();
+            } else {
+                res.status(403).json({ message: 'Admin access required' });
+            }
+            return;
+        }
+
         const user = await prisma.user.findUnique({
-            where: { id: req.user.id }
+            where: { id: req.user.id },
+            select: { role: true }
         });
 
-        if (user && user.role === 'ADMIN') {
+        const isAdmin = !!user && user.role === 'ADMIN';
+        adminRoleCache.set(cacheKey, {
+            isAdmin,
+            expiresAt: now + ADMIN_ROLE_CACHE_TTL_MS
+        });
+
+        if (isAdmin) {
             next();
         } else {
             res.status(403).json({ message: 'Admin access required' });

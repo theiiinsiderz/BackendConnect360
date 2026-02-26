@@ -32,16 +32,12 @@ export const verifyOtp = async (req: Request, res: Response) => {
         if (otp === '111111' || otpStore[phoneNumber] === otp) {
             delete otpStore[phoneNumber]; // Clear OTP after use
 
-            // Find or create user
-            let user = await prisma.user.findUnique({
-                where: { phoneNumber }
+            // Find or create user in one round-trip
+            const user = await prisma.user.upsert({
+                where: { phoneNumber },
+                update: {},
+                create: { phoneNumber }
             });
-
-            if (!user) {
-                user = await prisma.user.create({
-                    data: { phoneNumber }
-                });
-            }
 
             // Generate JWT
             const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
