@@ -347,29 +347,64 @@ export const generateBatch = async (req: Request, res: Response) => {
 
 export const getAllActiveTags = async (req: Request, res: Response) => {
     try {
-        const tags = await prisma.tag.findMany({
-            where: {
-                status: 'ACTIVE'
-            },
-            include: {
-                user: {
-                    select: {
-                        id: true,
-                        name: true,
-                        email: true,
-                        phoneNumber: true,
-                        avatar: true
-                    }
+        const { vendorId, search, page = '1', limit = '50' } = req.query;
+        const p = parseInt(page as string) || 1;
+        const l = parseInt(limit as string) || 50;
+
+        const where: any = {
+            status: 'ACTIVE'
+        };
+
+        if (vendorId) {
+            where.companyId = vendorId as string;
+        }
+
+        if (search) {
+            where.user = {
+                name: {
+                    contains: search as string,
+                    mode: 'insensitive'
+                }
+            };
+        }
+
+        const [tags, total] = await Promise.all([
+            prisma.tag.findMany({
+                where,
+                include: {
+                    company: true,
+                    user: {
+                        select: {
+                            id: true,
+                            name: true,
+                            email: true,
+                            phoneNumber: true,
+                            avatar: true
+                        }
+                    },
+                    carProfile: true,
+                    kidProfile: true,
+                    petProfile: true,
+                    bikeProfile: true,
                 },
-                carProfile: true,
-                kidProfile: true,
-                petProfile: true,
-            },
-            orderBy: {
-                createdAt: 'desc'
+                orderBy: {
+                    createdAt: 'desc'
+                },
+                skip: (p - 1) * l,
+                take: l
+            }),
+            prisma.tag.count({ where })
+        ]);
+
+        res.status(200).json({
+            tags,
+            pagination: {
+                total,
+                page: p,
+                limit: l,
+                totalPages: Math.ceil(total / l)
             }
         });
-        res.status(200).json(tags);
     } catch (error) {
         console.error('Error fetching all active tags:', error);
         res.status(500).json({ message: 'Server error fetching tags', error });
@@ -380,38 +415,74 @@ export const getAllActiveTags = async (req: Request, res: Response) => {
 export const getTagsByType = async (req: Request, res: Response) => {
     try {
         const { type } = req.params;
-        const validTypes = ['CAR', 'KID', 'PET'];
+        const { status, vendorId, search, page = '1', limit = '50' } = req.query;
+        const p = parseInt(page as string) || 1;
+        const l = parseInt(limit as string) || 50;
 
+        const validTypes = ['CAR', 'BIKE', 'PET', 'KID'];
 
         if (!validTypes.includes(type.toUpperCase())) {
             return res.status(400).json({ message: 'Invalid domain type' });
         }
 
+        const where: any = {
+            domainType: type.toUpperCase() as any
+        };
 
-        const tags = await prisma.tag.findMany({
-            where: {
-                domainType: type.toUpperCase() as any,
-                status: 'ACTIVE'
-            },
-            include: {
-                user: {
-                    select: {
-                        id: true,
-                        name: true,
-                        email: true,
-                        phoneNumber: true,
-                        avatar: true
-                    }
+        if (status) {
+            where.status = status.toString().toUpperCase() as any;
+        }
+
+        if (vendorId) {
+            where.companyId = vendorId as string;
+        }
+
+        if (search) {
+            where.user = {
+                name: {
+                    contains: search as string,
+                    mode: 'insensitive'
+                }
+            };
+        }
+
+        const [tags, total] = await Promise.all([
+            prisma.tag.findMany({
+                where,
+                include: {
+                    company: true,
+                    user: {
+                        select: {
+                            id: true,
+                            name: true,
+                            email: true,
+                            phoneNumber: true,
+                            avatar: true
+                        }
+                    },
+                    carProfile: true,
+                    kidProfile: true,
+                    petProfile: true,
+                    bikeProfile: true,
                 },
-                carProfile: true,
-                kidProfile: true,
-                petProfile: true,
-            },
-            orderBy: {
-                createdAt: 'desc'
+                orderBy: {
+                    createdAt: 'desc'
+                },
+                skip: (p - 1) * l,
+                take: l
+            }),
+            prisma.tag.count({ where })
+        ]);
+
+        res.status(200).json({
+            tags,
+            pagination: {
+                total,
+                page: p,
+                limit: l,
+                totalPages: Math.ceil(total / l)
             }
         });
-        res.status(200).json(tags);
     } catch (error) {
         console.error(`Error fetching tags of type ${req.params.type}:`, error);
         res.status(500).json({ message: 'Server error fetching tags by type', error });
