@@ -47,7 +47,10 @@ export const createTag = async (req: Request, res: Response) => {
     try {
         const { code, nickname, domainType, companyId } = req.body;
 
-        const existingTag = await prisma.tag.findUnique({ where: { code } });
+        const existingTag = await prisma.tag.findUnique({
+            where: { code },
+            select: { id: true, userId: true, status: true }
+        });
         // @ts-ignore
         const userId = req.user?.id;
 
@@ -73,53 +76,60 @@ export const createTag = async (req: Request, res: Response) => {
         // Phase 1 Rules: domainType is locked at creation
         const selectedDomain: DomainType = domainType || 'CAR';
 
-        let resolvedCompanyId: string;
-        if (typeof companyId === 'string' && companyId.trim()) {
-            const company = await prisma.company.findUnique({
-                where: { id: companyId.trim() },
-                select: { id: true }
-            });
+        const newTag = await prisma.$transaction(async (tx) => {
+            let resolvedCompanyId: string;
 
-            if (!company) {
-                return res.status(400).json({ message: 'Invalid companyId' });
-            }
-
-            resolvedCompanyId = company.id;
-        } else {
-            const existingCompany = await prisma.company.findFirst({
-                select: { id: true },
-                orderBy: { createdAt: 'asc' }
-            });
-
-            if (existingCompany) {
-                resolvedCompanyId = existingCompany.id;
-            } else {
-                const createdCompany = await prisma.company.create({
-                    data: { name: 'Connect360 Default Company' },
+            if (typeof companyId === 'string' && companyId.trim()) {
+                const company = await tx.company.findUnique({
+                    where: { id: companyId.trim() },
                     select: { id: true }
                 });
-                resolvedCompanyId = createdCompany.id;
+
+                if (!company) {
+                    throw new Error('INVALID_COMPANY_ID');
+                }
+
+                resolvedCompanyId = company.id;
+            } else {
+                const existingCompany = await tx.company.findFirst({
+                    select: { id: true },
+                    orderBy: { createdAt: 'asc' }
+                });
+
+                if (existingCompany) {
+                    resolvedCompanyId = existingCompany.id;
+                } else {
+                    const createdCompany = await tx.company.create({
+                        data: { name: 'Connect360 Default Company' },
+                        select: { id: true }
+                    });
+                    resolvedCompanyId = createdCompany.id;
+                }
             }
-        }
 
-        const newTag = await prisma.tag.create({
-            data: {
-                code,
-                nickname,
-                userId,
-                companyId: resolvedCompanyId,
-                domainType: selectedDomain,
-                status: 'ACTIVE',
-            },
+            const profileCreate: any = {};
+            if (selectedDomain === 'CAR') profileCreate.carProfile = { create: { vehicleNumber: '' } };
+            if (selectedDomain === 'KID') profileCreate.kidProfile = { create: { displayName: '', primaryGuardian: {} } };
+            if (selectedDomain === 'PET') profileCreate.petProfile = { create: { petName: '', ownerContact: {} } };
+
+            return tx.tag.create({
+                data: {
+                    code,
+                    nickname,
+                    userId,
+                    companyId: resolvedCompanyId,
+                    domainType: selectedDomain,
+                    status: 'ACTIVE',
+                    ...profileCreate
+                },
+            });
         });
-
-        // Initialize appropriate profile
-        if (selectedDomain === 'CAR') await prisma.carProfile.create({ data: { tagId: newTag.id, vehicleNumber: '' } });
-        if (selectedDomain === 'KID') await prisma.kidProfile.create({ data: { tagId: newTag.id, displayName: '', primaryGuardian: {} } });
-        if (selectedDomain === 'PET') await prisma.petProfile.create({ data: { tagId: newTag.id, petName: '', ownerContact: {} } });
 
         res.status(201).json(newTag);
     } catch (error) {
+        if (error instanceof Error && error.message === 'INVALID_COMPANY_ID') {
+            return res.status(400).json({ message: 'Invalid companyId' });
+        }
         console.error('Create Tag Error:', error);
         res.status(500).json({ message: 'Server error', error });
     }
@@ -142,32 +152,33 @@ export const updatePrivacy = async (req: Request, res: Response) => {
         // @ts-ignore
         const userId = req.user?.id;
 
-        const tag = await prisma.tag.findUnique({ where: { id, userId } });
-        if (!tag) {
-            return res.status(404).json({ message: 'Tag not found or unauthorized' });
-        }
-
-        // Validate the setting field mapping
-        const validSettings: Record<string, boolean> = {
-            allowMaskedCall: true,
-            allowWhatsapp: true,
-            allowSms: true,
-            showEmergencyContact: true,
+        // Validate and whitelist toggle field
+        const validSettings: Record<string, string> = {
+            allowMaskedCall: '"allowMaskedCall"',
+            allowWhatsapp: '"allowWhatsapp"',
+            allowSms: '"allowSms"',
+            showEmergencyContact: '"showEmergencyContact"',
         };
 
-        if (!validSettings[setting]) {
+        const selectedColumn = validSettings[setting];
+        if (!selectedColumn) {
             return res.status(400).json({ message: 'Invalid privacy setting key' });
         }
 
-        // Toggle the field
-        // @ts-ignore
-        const updatedTag = await prisma.tag.update({
-            where: { id },
-            data: {
-                // @ts-ignore (Boolean toggle on a dynamic key mapping directly to the DB schema)
-                [setting]: !tag[setting],
-            }
-        });
+        const updatedRows = await prisma.$queryRawUnsafe<any[]>(
+            `UPDATE "Tag"
+             SET ${selectedColumn} = NOT ${selectedColumn},
+                 "updatedAt" = NOW()
+             WHERE "id" = $1 AND "userId" = $2
+             RETURNING *`,
+            id,
+            userId
+        );
+
+        const updatedTag = updatedRows[0];
+        if (!updatedTag) {
+            return res.status(404).json({ message: 'Tag not found or unauthorized' });
+        }
 
         res.status(200).json({ message: 'Privacy updated successfully', tag: updatedTag });
     } catch (error) {
@@ -210,48 +221,60 @@ export const activateTagVerifyOtp = async (req: Request, res: Response) => {
 
         const tag = await prisma.tag.findUnique({
             where: { code: tagCode },
-            include: { carProfile: true, kidProfile: true, petProfile: true }
+            select: {
+                id: true,
+                domainType: true,
+                status: true
+            }
         });
 
         if (!tag) return res.status(404).json({ success: false, message: 'Tag not found' });
         if (tag.status !== 'MINTED') return res.status(400).json({ success: false, message: 'Tag already activated' });
 
-        // 1. Find or Create User
-        let user = await prisma.user.findUnique({ where: { phoneNumber } });
-        if (!user) {
-            user = await prisma.user.create({ data: { phoneNumber } });
-        }
+        const { user, updatedTag } = await prisma.$transaction(async (tx) => {
+            // 1. Find or Create User
+            const resolvedUser = await tx.user.upsert({
+                where: { phoneNumber },
+                update: {},
+                create: { phoneNumber }
+            });
 
-        // 2. Update Tag
-        const updatedTag = await prisma.tag.update({
-            where: { id: tag.id },
-            data: {
-                userId: user.id,
-                status: 'ACTIVE',
-                nickname: tagIdentifier // Use identifier as default nickname
+            // 2. Update Tag
+            const resolvedTag = await tx.tag.update({
+                where: { id: tag.id },
+                data: {
+                    userId: resolvedUser.id,
+                    status: 'ACTIVE',
+                    nickname: tagIdentifier // Use identifier as default nickname
+                }
+            });
+
+            // 3. Initialize/Update Profile based on domain
+            if (tag.domainType === 'CAR') {
+                await tx.carProfile.upsert({
+                    where: { tagId: tag.id },
+                    create: { tagId: tag.id, vehicleNumber: tagIdentifier },
+                    update: { vehicleNumber: tagIdentifier }
+                });
+            } else if (tag.domainType === 'KID') {
+                await tx.kidProfile.upsert({
+                    where: { tagId: tag.id },
+                    create: { tagId: tag.id, displayName: tagIdentifier, primaryGuardian: { name: 'Guardian', phone: phoneNumber } },
+                    update: { displayName: tagIdentifier }
+                });
+            } else if (tag.domainType === 'PET') {
+                await tx.petProfile.upsert({
+                    where: { tagId: tag.id },
+                    create: { tagId: tag.id, petName: tagIdentifier, ownerContact: { name: 'Owner', phone: phoneNumber } },
+                    update: { petName: tagIdentifier }
+                });
             }
-        });
 
-        // 3. Initialize/Update Profile based on domain
-        if (tag.domainType === 'CAR') {
-            await prisma.carProfile.upsert({
-                where: { tagId: tag.id },
-                create: { tagId: tag.id, vehicleNumber: tagIdentifier },
-                update: { vehicleNumber: tagIdentifier }
-            });
-        } else if (tag.domainType === 'KID') {
-            await prisma.kidProfile.upsert({
-                where: { tagId: tag.id },
-                create: { tagId: tag.id, displayName: tagIdentifier, primaryGuardian: { name: 'Guardian', phone: phoneNumber } },
-                update: { displayName: tagIdentifier }
-            });
-        } else if (tag.domainType === 'PET') {
-            await prisma.petProfile.upsert({
-                where: { tagId: tag.id },
-                create: { tagId: tag.id, petName: tagIdentifier, ownerContact: { name: 'Owner', phone: phoneNumber } },
-                update: { petName: tagIdentifier }
-            });
-        }
+            return {
+                user: resolvedUser,
+                updatedTag: resolvedTag
+            };
+        });
 
         // 4. Generate JWT for the user so they are logged in after activation
         const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';

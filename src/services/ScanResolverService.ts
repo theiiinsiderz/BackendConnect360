@@ -13,6 +13,16 @@ type TagRecord = {
     allowSms: boolean;
 };
 
+type TagOwner = {
+    id: string;
+    phoneNumber: string | null;
+};
+
+export interface ScanResolutionWithOwner {
+    result: ScanResult;
+    owner: TagOwner | null;
+}
+
 // Defined shape of the Phase 2 API contract to be shaped by Phase 1 backend rules
 export interface ScanResult {
     metadata: {
@@ -28,8 +38,28 @@ export class ScanResolverService {
      * Core Engine Gate: Look up the tag and validate its physical status
      */
     static async resolveTag(tagCode: string): Promise<ScanResult> {
+        const { result } = await this.resolveTagWithOwner(tagCode);
+        return result;
+    }
+
+    static async resolveTagWithOwner(tagCode: string): Promise<ScanResolutionWithOwner> {
         const tag = await prisma.tag.findUnique({
-            where: { code: tagCode }
+            where: { code: tagCode },
+            select: {
+                id: true,
+                code: true,
+                domainType: true,
+                status: true,
+                allowMaskedCall: true,
+                allowWhatsapp: true,
+                allowSms: true,
+                user: {
+                    select: {
+                        id: true,
+                        phoneNumber: true,
+                    }
+                }
+            }
         });
 
         if (!tag) {
@@ -44,15 +74,21 @@ export class ScanResolverService {
 
         // If the tag is not ready/active, we don't fetch the domain payload to save DB cycles
         if (tag.status !== 'ACTIVE') {
-            return { metadata };
+            return {
+                result: { metadata },
+                owner: tag.user
+            };
         }
 
         // Gate 3: Domain Delegation
         const payload = await this.delegateToDomain(tag);
 
         return {
-            metadata,
-            payload,
+            result: {
+                metadata,
+                payload,
+            },
+            owner: tag.user
         };
     }
 

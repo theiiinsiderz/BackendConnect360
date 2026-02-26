@@ -6,13 +6,23 @@ export const executeAction = async (req: Request, res: Response): Promise<void> 
         const { tagCode } = req.params;
         const { actionType, scannerPhone, location } = req.body;
 
-        const tag = await prisma.tag.findUnique({ 
+        const tag = await prisma.tag.findUnique({
             where: { code: tagCode },
-            include: {
-                carProfile: true,
-                kidProfile: true,
-                petProfile: true,
-                user: true
+            select: {
+                domainType: true,
+                allowMaskedCall: true,
+                allowWhatsapp: true,
+                allowSms: true,
+                kidProfile: {
+                    select: {
+                        requireLocationShare: true
+                    }
+                },
+                user: {
+                    select: {
+                        phoneNumber: true
+                    }
+                }
             }
         });
 

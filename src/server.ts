@@ -135,20 +135,15 @@ const getTheme = (domain: string) => {
 app.get('/scan/:tagId', async (req, res) => {
     const { tagId } = req.params;
     try {
-        const result = await ScanResolverService.resolveTag(tagId);
+        const resolution = await ScanResolverService.resolveTagWithOwner(tagId);
+        const { result, owner } = resolution;
         const { metadata, payload } = result;
 
-        // Fetch tag with user for phone number
-        const tagWithUser = await prisma.tag.findUnique({
-            where: { code: tagId },
-            include: { user: true }
-        });
-
-        const resolvedDomain = (tagWithUser?.domainType || metadata.domainType || 'CAR') as string;
+        const resolvedDomain = (metadata.domainType || 'CAR') as string;
         const theme = getTheme(resolvedDomain);
-        const displayName = payload.displayName || payload.petName || payload.nickname || 'Connect360 Tag';
-        const subtitle = payload.registrationMasked || payload.medicalAlerts || payload.breedInfo || 'Verified Profile';
-        const ownerPhone = tagWithUser?.user?.phoneNumber || '';
+        const displayName = payload?.displayName || payload?.petName || payload?.nickname || 'Connect360 Tag';
+        const subtitle = payload?.registrationMasked || payload?.medicalAlerts || payload?.breedInfo || 'Verified Profile';
+        const ownerPhone = owner?.phoneNumber || '';
         const callLabel = resolvedDomain === 'KID' ? 'Call Guardian' : 'Call Owner';
 
         res.send(`
@@ -320,7 +315,7 @@ app.get('/scan/:tagId', async (req, res) => {
                 '</a>'
                 : ''}
 
-                <a href="/message?ownerId=${tagWithUser?.user?.id || ''}&domain=${encodeURIComponent(resolvedDomain)}" class="btn-secondary">
+                <a href="/message?ownerId=${owner?.id || ''}&domain=${encodeURIComponent(resolvedDomain)}" class="btn-secondary">
                     <ion-icon name="mail-outline" style="font-size: 20px;"></ion-icon>
                     Secure Message
                 </a>
@@ -336,9 +331,6 @@ app.get('/scan/:tagId', async (req, res) => {
         const message = error.message;
 
         if (message.includes('PROFILE_MISSING')) {
-            // Fetch tag for context
-            const tag = await prisma.tag.findUnique({ where: { code: tagId } });
-
             return res.send(`
 <!DOCTYPE html>
 <html lang="en">

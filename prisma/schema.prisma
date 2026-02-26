@@ -54,6 +54,8 @@ model Company {
   updatedAt DateTime @updatedAt
 
   tags Tag[]
+
+  @@index([createdAt])
 }
 
 // =======================
@@ -119,6 +121,10 @@ model Tag {
 
   @@index([companyId])
   @@index([userId])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([companyId, status, createdAt(sort: Desc)])
+  @@index([domainType, status, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
 }
 
 // =======================
@@ -202,6 +208,8 @@ model Product {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([isActive])
 }
 
 // =======================
@@ -232,4 +240,6 @@ model Message {
   isRead     Boolean  @default(false)
 
   createdAt DateTime @default(now())
+
+  @@index([ownerId, createdAt(sort: Desc)])
 }

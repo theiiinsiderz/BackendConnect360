@@ -37,17 +37,20 @@ const MOCK_PRODUCTS = [
 
 export const getProducts = async (req: Request, res: Response) => {
     try {
-        // Check if products exist, if not seed them
-        const count = await prisma.product.count();
-        if (count === 0) {
+        let products = await prisma.product.findMany({
+            where: { isActive: true }
+        });
+
+        // Seed once if catalog is empty
+        if (products.length === 0) {
             await prisma.product.createMany({
                 data: MOCK_PRODUCTS
             });
+            products = await prisma.product.findMany({
+                where: { isActive: true }
+            });
         }
 
-        const products = await prisma.product.findMany({
-            where: { isActive: true }
-        });
         res.json(products);
     } catch (error) {
         console.error('Get Products Error:', error);
