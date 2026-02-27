@@ -56,6 +56,13 @@ const domainConfigs: Record<DomainType, {
         cta: 'Call Vehicle Owner',
         domainLabel: 'VEHICLE TAG',
     },
+    [DomainType.BIKE]: {
+        primary: '#2B8A3E', // Forest Green
+        secondary: '#FFD43B', // Bright Yellow
+        text: '#FFFFFF',
+        cta: 'Contact Bike Owner',
+        domainLabel: 'BIKE TAG',
+    },
     [DomainType.KID]: {
         primary: '#1864AB', // Trust Blue
         secondary: '#FAB005', // Warm Yellow
@@ -78,6 +85,18 @@ const config = domainConfigs[domainType];
 
 async function main() {
     console.log(`🚀 Starting batch generation of ${BATCH_SIZE} blank tags for domain ${domainType}...`);
+
+    // Get or create default company
+    let company = await prisma.company.findFirst();
+    if (!company) {
+        company = await prisma.company.create({
+            data: {
+                name: 'Default Company',
+                contactEmail: 'admin@connect360.com',
+            },
+        });
+        console.log(`✅ Created default company: ${company.id}`);
+    }
 
     const tagsToCreate: any[] = [];
     const existingCodes = new Set<string>();
@@ -107,6 +126,7 @@ async function main() {
                 code,
                 domainType,
                 status: TagStatus.MINTED,
+                companyId: company.id,
             });
 
             // ── Generate QR Code with public URL ──
@@ -177,6 +197,7 @@ async function main() {
                     code: t.code,
                     domainType: t.domainType,
                     status: t.status,
+                    companyId: t.companyId,
                 })),
                 skipDuplicates: true,
             });
