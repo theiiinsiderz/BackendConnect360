@@ -371,7 +371,7 @@ router.get('/drop-token', (_req, res) => {
     res.json({ token: generatePublicDropToken() });
 });
 
-router.get('/messages/:ownerId', async (req, res) => {
+router.get('/api/messages/:ownerId', async (req, res) => {
     try {
         const { ownerId } = req.params;
 
