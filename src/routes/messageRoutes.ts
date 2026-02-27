@@ -498,33 +498,60 @@ router.post('/drop/:token', async (req, res) => {
 
     if (inserted.length > 0) {
         try {
-            const tagCode = token.split('-').slice(0, 3).join('-');
-            const tag = await prisma.tag.findUnique({
-                where: { code: tagCode },
-                select: { userId: true },
+            console.log('Message inserted, token:', token);
+            
+            // Try to find tag by matching the derived token
+            const tags = await prisma.tag.findMany({
+                where: { userId: { not: null } },
+                select: { code: true, userId: true },
             });
 
-            if (tag?.userId) {
+            let matchedTag = null;
+            for (const tag of tags) {
+                const derivedToken = crypto
+                    .createHmac('sha256', process.env.DROP_TOKEN_DERIVE_SECRET || process.env.JWT_SECRET || 'connect360-drop-token-hash')
+                    .update(`drop:${tag.code}`)
+                    .digest('base64')
+                    .replace(/\+/g, '-')
+                    .replace(/\//g, '_')
+                    .replace(/=+$/g, '');
+                
+                if (derivedToken === token) {
+                    matchedTag = tag;
+                    break;
+                }
+            }
+
+            if (matchedTag?.userId) {
+                console.log('Found matching tag:', matchedTag.code, 'for user:', matchedTag.userId);
+                
                 await prisma.inAppMessage.create({
                     data: {
-                        ownerId: tag.userId,
+                        ownerId: matchedTag.userId,
                         senderName,
                         message: sanitizedContent,
                     },
                 });
 
+                console.log('InAppMessage created successfully');
+
                 const deviceToken = await prisma.deviceToken.findUnique({
-                    where: { ownerId: tag.userId },
+                    where: { ownerId: matchedTag.userId },
                 });
 
                 if (deviceToken?.pushToken) {
+                    console.log('Sending push notification to:', deviceToken.pushToken);
                     await NotificationService.sendPushNotification(
                         deviceToken.pushToken,
                         'New Message',
                         `${senderName}: ${sanitizedContent.substring(0, 50)}${sanitizedContent.length > 50 ? '...' : ''}`,
                         { type: 'message', messageId: crypto.randomUUID() }
                     );
+                } else {
+                    console.log('No device token found for user:', matchedTag.userId);
                 }
+            } else {
+                console.log('No matching tag found for token');
             }
         } catch (error) {
             console.error('Error creating in-app message:', error);
