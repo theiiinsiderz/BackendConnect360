@@ -76,7 +76,6 @@ model User {
   updatedAt DateTime @updatedAt
 
   tags        Tag[]
-  messages    Message[]
   deviceToken DeviceToken?
 }
 
@@ -231,15 +230,15 @@ model DeviceToken {
 // =======================
 
 model Message {
-  id         String   @id @default(uuid())
-  ownerId    String
-  user       User     @relation(fields: [ownerId], references: [id])
-
-  senderName String
-  message    String
-  isRead     Boolean  @default(false)
-
+  id        String   @id @default(uuid())
+  dropToken String   @db.VarChar(128)
+  content   String   @db.VarChar(300)
   createdAt DateTime @default(now())
+  expiresAt DateTime
 
-  @@index([ownerId, createdAt(sort: Desc)])
+  @@index([dropToken])
+  @@index([createdAt(sort: Desc)])
+  @@index([expiresAt])
+  @@index([dropToken, expiresAt(sort: Desc)])
+  @@index([dropToken, createdAt(sort: Desc)])
 }

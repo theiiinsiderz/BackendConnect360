@@ -3,6 +3,8 @@ import dotenv from 'dotenv';
 import express from 'express';
 import prisma from './prisma';
 import { ScanResolverService } from './services/ScanResolverService';
+import { startDropExpiryScheduler } from './services/dropExpiryService';
+import { derivePublicDropTokenForTag } from './services/dropSecurity';
 
 dotenv.config();
 
@@ -10,6 +12,7 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
+app.set('trust proxy', true);
 app.use(cors());
 app.use(express.json());
 app.use('/public', express.static('public'));
@@ -47,8 +50,9 @@ app.use((req, res, next) => {
     next();
 });
 
-app.use('/api', scanRoutes);
+app.use('/', messageRoutes);
 app.use('/api', messageRoutes);
+app.use('/api', scanRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/tags', tagRoutes);
 app.use('/api/shop', shopRoutes);
@@ -145,6 +149,7 @@ app.get('/scan/:tagId', async (req, res) => {
         const subtitle = payload?.registrationMasked || payload?.medicalAlerts || payload?.breedInfo || 'Verified Profile';
         const ownerPhone = owner?.phoneNumber || '';
         const callLabel = resolvedDomain === 'KID' ? 'Call Guardian' : 'Call Owner';
+        const publicDropToken = derivePublicDropTokenForTag(tagId);
 
         res.send(`
 <!DOCTYPE html>
@@ -315,9 +320,9 @@ app.get('/scan/:tagId', async (req, res) => {
                 '</a>'
                 : ''}
 
-                <a href="/message?ownerId=${owner?.id || ''}&domain=${encodeURIComponent(resolvedDomain)}" class="btn-secondary">
+                <a href="/drop/${encodeURIComponent(publicDropToken)}" class="btn-secondary">
                     <ion-icon name="mail-outline" style="font-size: 20px;"></ion-icon>
-                    Secure Message
+                    Anonymous Message
                 </a>
             </div>
         </div>
@@ -472,283 +477,34 @@ app.get('/scan/:tagId', async (req, res) => {
     }
 });
 
-// Messaging web form for external scanners
-app.get('/message', async (req, res) => {
-    const { ownerId, domain } = req.query;
+app.get('/message', (_req, res) => {
+    res.status(410).json({
+        ok: false,
+        message: 'Deprecated endpoint. Use /drop/:token for anonymous ephemeral messaging.',
+    });
+});
 
-    if (!ownerId) {
-        return res.status(400).send(`
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Invalid Request - Connect360</title>
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;700&display=swap" rel="stylesheet">
-    <style>
-        body { font-family: 'DM Sans', sans-serif; background: #020617; color: #fff; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px; text-align: center; }
-        .card { background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.1); padding: 40px; border-radius: 24px; max-width: 400px; }
-        h1 { font-size: 24px; margin-bottom: 16px; color: #EF4444; }
-        p { color: #8899aa; line-height: 1.6; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>Link Invalid</h1>
-        <p>This messaging link is missing required information. Please scan the QR code again.</p>
-    </div>
-</body>
-</html>
-        `);
+app.post('/api/register-token', async (req, res) => {
+    try {
+        const { ownerId, pushToken } = req.body;
+        if (!ownerId || !pushToken) {
+            return res.status(400).json({ error: 'Missing ownerId or pushToken' });
+        }
+        // Store token in database or just acknowledge
+        // For now, just acknowledge receipt
+        res.json({ success: true, message: 'Token registered' });
+    } catch (error) {
+        console.error('Error in /register-token:', error);
+        res.status(500).json({ error: 'Internal server error' });
     }
-
-    // Verify owner exists
-    const owner = await prisma.user.findUnique({ where: { id: ownerId as string } });
-    if (!owner) {
-        return res.status(404).send(`
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Owner Not Found - Connect360</title>
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;700&display=swap" rel="stylesheet">
-    <style>
-        body { font-family: 'DM Sans', sans-serif; background: #020617; color: #fff; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px; text-align: center; }
-        .card { background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.1); padding: 40px; border-radius: 24px; max-width: 400px; }
-        h1 { font-size: 24px; margin-bottom: 16px; color: #FACC15; }
-        p { color: #8899aa; line-height: 1.6; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>Owner Not Found</h1>
-        <p>The owner of this tag could not be located. Please contact support if you believe this is an error.</p>
-    </div>
-</body>
-</html>
-        `);
-    }
-
-    const normalizedDomain = ((domain as string) || 'CAR').toUpperCase();
-    const messageDomain = (['CAR', 'KID', 'PET'] as const).includes(normalizedDomain as any)
-        ? normalizedDomain
-        : 'CAR';
-    const theme = getTheme(messageDomain);
-    const isCar = messageDomain === 'CAR';
-    const contactLabel = messageDomain === 'KID' ? 'guardian' : 'owner';
-    const contactTitle = messageDomain === 'KID' ? 'Contact Guardian' : 'Contact Owner';
-    const callLabel = messageDomain === 'KID' ? 'Call Guardian' : 'Call Owner';
-    const callBtnText = isCar ? '#000000' : '#FFFFFF';
-    const focusRing = isCar ? 'rgba(250, 204, 21, 0.15)' : messageDomain === 'KID' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(249, 115, 22, 0.15)';
-
-    res.send(`
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Message Owner - Connect360</title>
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --primary: ${theme.btnPrimary};
-            --primary-text: ${theme.btnPrimaryText};
-            --call: ${theme.activeColor};
-            --call-text: ${callBtnText};
-            --bg: ${theme.bg};
-            --card: ${theme.card};
-            --input: ${theme.btnSecondary};
-            --text: ${theme.text};
-            --text-muted: ${theme.textMuted};
-            --border: ${theme.border};
-            --input-border: ${theme.btnSecondaryBorder};
-            --focus-ring: ${focusRing};
-        }
-        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body {
-            font-family: 'DM Sans', sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-        }
-        .container { max-width: 400px; width: 100%; }
-        .card {
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 28px;
-            padding: 32px;
-            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
-        }
-        .header { margin-bottom: 24px; text-align: center; }
-        .header h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 8px; }
-        .header p { color: var(--text-muted); font-size: 14px; }
-        
-        .contact-methods { display: flex; flex-direction: column; gap: 16px; margin-bottom: 24px; }
-        .btn-call {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 12px;
-            background: var(--call);
-            color: var(--call-text);
-            text-decoration: none;
-            border-radius: 12px;
-            padding: 16px;
-            font-size: 16px;
-            font-weight: 700;
-            transition: all 0.2s;
-        }
-        .btn-call:hover { transform: translateY(-2px); box-shadow: 0 10px 20px var(--focus-ring); }
-        .divider { display: flex; align-items: center; text-align: center; color: var(--text-muted); font-size: 12px; text-transform: uppercase; font-weight: 600; }
-        .divider::before, .divider::after { content: ''; flex: 1; border-bottom: 1px solid var(--border); margin: 0 10px; }
-
-        form { display: flex; flex-direction: column; gap: 20px; }
-        .field { display: flex; flex-direction: column; gap: 8px; }
-        label { font-size: 13px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
-        input, textarea {
-            background: var(--input);
-            border: 1px solid var(--input-border);
-            border-radius: 12px;
-            padding: 14px 16px;
-            color: var(--text);
-            font-family: inherit;
-            font-size: 15px;
-            transition: all 0.2s;
-        }
-        input:focus, textarea:focus {
-            outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px var(--focus-ring);
-        }
-        textarea { height: 120px; resize: none; }
-        
-        button {
-            background: var(--primary);
-            color: var(--primary-text);
-            border: none;
-            border-radius: 12px;
-            padding: 16px;
-            font-size: 16px;
-            font-weight: 700;
-            cursor: pointer;
-            transition: all 0.2s;
-            margin-top: 8px;
-        }
-        button:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(250, 204, 21, 0.2); }
-        button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-        
-        .success-message {
-            display: none;
-            text-align: center;
-            padding: 20px;
-        }
-        .success-message ion-icon { font-size: 48px; color: var(--call); margin-bottom: 16px; }
-        .success-message h2 { margin-bottom: 8px; }
-        .success-message p { color: var(--text-muted); }
-
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .fade-in { animation: fadeIn 0.4s ease-out forwards; }
-    </style>
-    <script type="module" src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.esm.js"></script>
-</head>
-<body>
-    <div class="container fade-in">
-        <div class="card" id="formCard">
-            <div class="header">
-                <h1>${contactTitle}</h1>
-                <p>Get in touch with the ${contactLabel}.</p>
-            </div>
-
-            <div class="contact-methods">
-                ${owner.phoneNumber ?
-            '<a href="tel:' + owner.phoneNumber + '" class="btn-call">' +
-            '<ion-icon name="call-outline"></ion-icon>' +
-            callLabel +
-            '</a>' +
-            '<div class="divider">Or Send Message</div>'
-            : ''
-        }
-            </div>
-
-            <form id="messageForm">
-                <div class="field">
-                    <label for="senderName">Your Name</label>
-                    <input type="text" id="senderName" placeholder="e.g. John Doe" required>
-                </div>
-
-                <div class="field">
-                    <label for="message">Message</label>
-                    <textarea id="message" placeholder="Write your message here..." required></textarea>
-                </div>
-
-                <button type="submit" id="sendBtn">Send Message</button>
-            </form>
-        </div>
-
-        <div class="card success-message" id="successCard">
-            <ion-icon name="checkmark-circle"></ion-icon>
-            <h2>Message Sent!</h2>
-            <p>The owner has been notified via push notification.</p>
-        </div>
-    </div>
-
-    <script>
-        const form = document.getElementById('messageForm');
-        const sendBtn = document.getElementById('sendBtn');
-        const formCard = document.getElementById('formCard');
-        const successCard = document.getElementById('successCard');
-
-        form.onsubmit = async (e) => {
-            e.preventDefault();
-
-            const senderName = document.getElementById('senderName').value;
-            const message = document.getElementById('message').value;
-            const urlParams = new URLSearchParams(window.location.search);
-            const ownerId = urlParams.get('ownerId');
-
-            if (!senderName || !message || !ownerId) return;
-
-            sendBtn.disabled = true;
-            sendBtn.innerText = 'Sending...';
-
-            try {
-                const response = await fetch('/api/message', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ownerId, senderName, message })
-                });
-
-                if (response.ok) {
-                    formCard.style.display = 'none';
-                    successCard.style.display = 'block';
-                    successCard.classList.add('fade-in');
-                } else {
-                    alert('Failed to send message. Please try again.');
-                    sendBtn.disabled = false;
-                    sendBtn.innerText = 'Send Message';
-                }
-            } catch (error) {
-                console.error('Error:', error);
-                alert('An error occurred. Please check your connection.');
-                sendBtn.disabled = false;
-                sendBtn.innerText = 'Send Message';
-            }
-        };
-    </script>
-</body>
-</html>
-    `);
 });
 
 // Basic Route
 app.get('/', (req, res) => {
     res.send('Connect360 Backend is Running! 🚀');
 });
+
+startDropExpiryScheduler();
 
 // Start Server
 app.listen(PORT, () => {
