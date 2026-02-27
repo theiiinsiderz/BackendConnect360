@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
 import prisma from '../prisma';
+import { getTemplate } from '../templates/qrTemplates';
 
 // QR codes encode a publicly accessible URL so ANY scanner app can open it.
 // While in development without a domain, use Cloudflare Quick Tunnels:
@@ -191,10 +192,8 @@ export const generateBatch = async (req: Request, res: Response) => {
         const cols = 3;
         let colCounter = 0;
 
-        // Colors
-        const BRAND_BLUE = '#0C1E3E';
+        // Brand colors (used for QR code color)
         const BRAND_ORANGE = '#F7931A';
-        const BRAND_WHITE = '#FFFFFF';
 
         // Generate Codes and PDF Content
         while (tagsToCreate.length < BATCH_SIZE) {
@@ -210,12 +209,13 @@ export const generateBatch = async (req: Request, res: Response) => {
                 };
                 tagsToCreate.push(tagData);
 
-                // QR encodes a public URL — scannable by any third-party QR app
+                // ── Generate QR Code ──
+                const qrColor = domainType === 'PET' ? '#1A2B48' : '#F7931A';
                 const qrBuffer = await QRCode.toBuffer(`${SCAN_BASE_URL}/scan/${code}`, {
                     errorCorrectionLevel: 'H',
                     margin: 0,
                     color: {
-                        dark: BRAND_ORANGE,
+                        dark: qrColor,
                         light: '#00000000' // transparent
                     }
                 });
@@ -227,84 +227,9 @@ export const generateBatch = async (req: Request, res: Response) => {
                     colCounter = 0;
                 }
 
-                // 1. Tag Background
-                doc.roundedRect(x, y, tagSize, tagSize, 12).fill(BRAND_BLUE);
-
-                // 2. Outer Orange Border (thick)
-                doc.roundedRect(x + 5, y + 5, tagSize - 10, tagSize - 10, 10)
-                    .lineWidth(2).stroke(BRAND_ORANGE);
-
-                // 3. Inner Orange Border (thin)
-                doc.roundedRect(x + 10, y + 10, tagSize - 20, tagSize - 20, 8)
-                    .lineWidth(1).stroke(BRAND_ORANGE);
-
-                // 4. Top QR Box
-                const qrSize = 40;
-                const qrBoxSize = qrSize + 16; // 8px padding on each side
-                const qrX = x + (tagSize - qrSize) / 2;
-                const qrY = y + 18;
-                const qrBoxX = qrX - 8;
-                const qrBoxY = qrY - 8;
-
-                // 4a. QR Design Background (if available)
-                // Previously pdfkit failed to load normal URLs so it fell back to orange border.
-                // We just use the orange border directly to ensure the correct QR design.
-                doc.roundedRect(qrBoxX, qrBoxY, qrBoxSize, qrBoxSize, 4)
-                    .lineWidth(2).stroke(BRAND_ORANGE);
-
-                // 4b. QR Code Image
-                // Drawn centered within the box
-                doc.image(qrBuffer, qrX, qrY, { width: qrSize });
-
-                // 5. "Emergency?" Text
-                doc.font('Helvetica-Bold').fontSize(22).fillColor('#C4FF00') // Lime green
-                    .text('Emergency?', x, y + 68, { width: tagSize, align: 'center' });
-
-                // 6. "Scan Here to call" Text
-                doc.font('Helvetica-Bold').fontSize(12).fillColor(BRAND_WHITE)
-                    .text('Scan Here to call', x, y + 92, { width: tagSize, align: 'center' });
-
-                // 6b. "Vehicle Owner" Text
-                doc.font('Helvetica-Bold').fontSize(14).fillColor(BRAND_WHITE)
-                    .text('Vehicle Owner', x, y + 106, { width: tagSize, align: 'center' });
-
-                // 7. Sponsor Logo Box
-                const sponsorWidth = 120;
-                const sponsorHeight = 30;
-                const sponsorX = x + (tagSize - sponsorWidth) / 2;
-                const sponsorY = y + 124;
-
-                // Sponsor Box Border
-                doc.roundedRect(sponsorX, sponsorY, sponsorWidth, sponsorHeight, 8)
-                    .lineWidth(1.5).stroke(BRAND_ORANGE);
-
-                // Sponsor Box Fill
-                doc.roundedRect(sponsorX + 3, sponsorY + 3, sponsorWidth - 6, sponsorHeight - 6, 6)
-                    .fill(BRAND_ORANGE);
-
-                // Embed vendor logo if available, else show placeholder text
-                if (logoBuffer) {
-                    try {
-                        doc.image(logoBuffer, sponsorX + 8, sponsorY + 4, {
-                            fit: [sponsorWidth - 16, sponsorHeight - 8],
-                            align: 'center',
-                            valign: 'center'
-                        });
-                    } catch (logoErr) {
-                        console.warn('Failed to load vendor logo:', logoErr);
-                        // Fallback to text placeholder
-                        doc.font('Helvetica-Bold').fontSize(11).fillColor(BRAND_BLUE)
-                            .text(company.name, sponsorX, sponsorY + 10, { width: sponsorWidth, align: 'center' });
-                    }
-                } else {
-                    // Show company name if no logo
-                    doc.font('Helvetica-Bold').fontSize(11).fillColor(BRAND_BLUE)
-                        .text(company.name, sponsorX, sponsorY + 10, { width: sponsorWidth, align: 'center' });
-                }
-
-                // 8. Tag Code (Small print below the tag for admin reference)
-                doc.font('Helvetica').fontSize(8).fillColor('#000000')
-                    .text(code, x, y + tagSize + 4, { width: tagSize, align: 'center' });
+                // Draw Tag using domain-specific template
+                const template = getTemplate(domainType);
+                template(doc, x, y, tagSize, code, qrBuffer, company, logoBuffer);
 
                 // Advance Layout
                 colCounter++;

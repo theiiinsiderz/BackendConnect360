@@ -64,3 +64,56 @@ export const scanTag = async (req: Request, res: Response): Promise<void> => {
         res.status(statusCode).json(response);
     }
 };
+
+export const getUserInfoByTagCode = async (req: Request, res: Response): Promise<void> => {
+    const { tagCode } = req.params;
+
+    try {
+        const resolution = await ScanResolverService.resolveTagWithOwner(tagCode);
+        const { result, owner } = resolution;
+
+        if (!owner?.phoneNumber) {
+            res.status(404).json({
+                success: false,
+                error: {
+                    code: 'OWNER_NOT_FOUND',
+                    message: 'No owner is linked to this tag yet.',
+                },
+            });
+            return;
+        }
+
+        res.status(200).json({
+            success: true,
+            data: {
+                tagCode: result.metadata.tagCode,
+                domainType: result.metadata.domainType,
+                owner: {
+                    id: owner.id,
+                    phoneNumber: owner.phoneNumber,
+                },
+            },
+        });
+    } catch (error: any) {
+        const message = error.message;
+
+        if (message === 'TAG_NOT_FOUND') {
+            res.status(404).json({
+                success: false,
+                error: {
+                    code: 'NOT_FOUND',
+                    message: 'This tag is not registered or does not exist.',
+                },
+            });
+            return;
+        }
+
+        res.status(500).json({
+            success: false,
+            error: {
+                code: 'INTERNAL_ERROR',
+                message: 'An unexpected error occurred while fetching owner info.',
+            },
+        });
+    }
+};
