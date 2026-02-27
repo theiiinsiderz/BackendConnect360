@@ -9,6 +9,7 @@ import {
     isValidDropTokenFormat,
     sanitizeDropContent,
 } from '../services/dropSecurity';
+import { NotificationService } from '../services/notificationService';
 
 const router = Router();
 
@@ -239,6 +240,7 @@ const renderDropPage = (token: string): string => `
         </section>
 
         <section class="card">
+            <input type="text" id="senderName" maxlength="50" placeholder="Your name (optional)" style="width: 100%; border: 1px solid var(--line); border-radius: 12px; padding: 12px; font: inherit; color: var(--text); background: #f8fafc; margin-bottom: 12px;" />
             <textarea id="content" maxlength="300" placeholder="Write a short notice (max 300 chars)..."></textarea>
             <div class="meta">
                 <span>Max 300 characters</span>
@@ -256,6 +258,7 @@ const renderDropPage = (token: string): string => `
 
     <script>
         const token = ${JSON.stringify(token)};
+        const senderNameEl = document.getElementById('senderName');
         const contentEl = document.getElementById('content');
         const counterEl = document.getElementById('counter');
         const statusEl = document.getElementById('status');
@@ -318,6 +321,7 @@ const renderDropPage = (token: string): string => `
 
         sendBtn.addEventListener('click', async () => {
             const rawContent = contentEl.value || '';
+            const senderName = senderNameEl.value.trim() || 'Anonymous';
             if (!rawContent.trim()) {
                 setStatus('Message cannot be empty.', true);
                 return;
@@ -334,7 +338,7 @@ const renderDropPage = (token: string): string => `
                         'Accept': 'application/json',
                     },
                     cache: 'no-store',
-                    body: JSON.stringify({ content: rawContent }),
+                    body: JSON.stringify({ content: rawContent, senderName }),
                 });
 
                 if (!response.ok) {
@@ -343,6 +347,7 @@ const renderDropPage = (token: string): string => `
                     return;
                 }
 
+                senderNameEl.value = '';
                 contentEl.value = '';
                 counterEl.textContent = '0/300';
                 setStatus('Notice submitted.');
@@ -364,6 +369,22 @@ const renderDropPage = (token: string): string => `
 
 router.get('/drop-token', (_req, res) => {
     res.json({ token: generatePublicDropToken() });
+});
+
+router.get('/messages/:ownerId', async (req, res) => {
+    try {
+        const { ownerId } = req.params;
+
+        const messages = await prisma.inAppMessage.findMany({
+            where: { ownerId },
+            orderBy: { createdAt: 'desc' },
+        });
+
+        res.json(messages);
+    } catch (error) {
+        console.error('Error fetching messages:', error);
+        res.status(500).json({ error: 'Failed to fetch messages' });
+    }
 });
 
 router.get('/drop/:token', async (req, res) => {
@@ -433,6 +454,7 @@ router.post('/drop/:token', async (req, res) => {
     }
 
     const rawContent = typeof req.body?.content === 'string' ? req.body.content : '';
+    const senderName = typeof req.body?.senderName === 'string' ? req.body.senderName.trim() : 'Anonymous';
     const trimmedContent = rawContent.trim();
     const charCount = Array.from(trimmedContent).length;
 
@@ -453,7 +475,6 @@ router.post('/drop/:token', async (req, res) => {
     const sanitizedContent = sanitizeDropContent(trimmedContent);
     const messageId = crypto.randomUUID();
 
-    // Single insert statement that also enforces per-token flood/cap thresholds.
     const inserted = await prisma.$queryRaw<Array<{ id: string }>>`
         INSERT INTO "Message" ("id", "dropToken", "content", "createdAt", "expiresAt")
         SELECT ${messageId}, ${tokenHash}, ${sanitizedContent}, NOW(), NOW() + INTERVAL '7 days'
@@ -474,6 +495,41 @@ router.post('/drop/:token', async (req, res) => {
             ) >= ${TOKEN_COOLDOWN_SECONDS}
         RETURNING "id"
     `;
+
+    if (inserted.length > 0) {
+        try {
+            const tagCode = token.split('-').slice(0, 3).join('-');
+            const tag = await prisma.tag.findUnique({
+                where: { code: tagCode },
+                select: { userId: true },
+            });
+
+            if (tag?.userId) {
+                await prisma.inAppMessage.create({
+                    data: {
+                        ownerId: tag.userId,
+                        senderName,
+                        message: sanitizedContent,
+                    },
+                });
+
+                const deviceToken = await prisma.deviceToken.findUnique({
+                    where: { ownerId: tag.userId },
+                });
+
+                if (deviceToken?.pushToken) {
+                    await NotificationService.sendPushNotification(
+                        deviceToken.pushToken,
+                        'New Message',
+                        `${senderName}: ${sanitizedContent.substring(0, 50)}${sanitizedContent.length > 50 ? '...' : ''}`,
+                        { type: 'message', messageId: crypto.randomUUID() }
+                    );
+                }
+            }
+        } catch (error) {
+            console.error('Error creating in-app message:', error);
+        }
+    }
 
     await delay(getDropResponseJitterMs());
     setNoStoreHeaders(res);
