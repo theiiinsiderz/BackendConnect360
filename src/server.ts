@@ -53,6 +53,32 @@ app.use((req, res, next) => {
 app.use('/', messageRoutes);
 app.use('/api', messageRoutes);
 app.use('/api', scanRoutes);
+
+app.post('/api/generate-drop-token', async (req, res) => {
+    try {
+        const { tagCode } = req.body;
+        if (!tagCode) {
+            return res.status(400).json({ error: 'Missing tagCode' });
+        }
+        const token = derivePublicDropTokenForTag(tagCode);
+        res.json({ token });
+    } catch (error) {
+        console.error('Error generating drop token:', error);
+        res.status(500).json({ error: 'Failed to generate token' });
+    }
+});
+
+app.post('/api/drop/:token', async (req, res) => {
+    const { token } = req.params;
+    const { content, senderName } = req.body;
+    
+    console.log('📨 Message received via API:', { token, senderName, contentLength: content?.length });
+    
+    // Forward to the drop route handler
+    req.url = `/drop/${token}`;
+    req.method = 'POST';
+    return messageRoutes(req, res, () => {});
+});
 app.use('/api/auth', authRoutes);
 app.use('/api/tags', tagRoutes);
 app.use('/api/shop', shopRoutes);
@@ -138,7 +164,34 @@ const getTheme = (domain: string) => {
 // Scan redirect route for external QR scanners
 app.get('/scan/:tagId', async (req, res) => {
     const { tagId } = req.params;
+    
+    // Log scan
+    console.log('🔍 External scan:', tagId);
+    
     try {
+        // Record scan in database
+        const tag = await prisma.tag.findFirst({
+            where: {
+                OR: [
+                    { code: tagId },
+                    { code: tagId.toUpperCase() },
+                    { code: `TAG-${tagId.toUpperCase()}` }
+                ]
+            },
+            select: { id: true, code: true }
+        });
+        
+        if (tag) {
+            await prisma.scan.create({
+                data: {
+                    tagId: tag.id,
+                    ipAddress: req.ip || 'unknown',
+                    location: 'web-scan'
+                }
+            });
+            console.log('✅ Scan recorded for tag:', tag.code);
+        }
+        
         const resolution = await ScanResolverService.resolveTagWithOwner(tagId);
         const { result, owner } = resolution;
         const { metadata, payload } = result;
@@ -487,14 +540,22 @@ app.get('/message', (_req, res) => {
 app.post('/api/register-token', async (req, res) => {
     try {
         const { ownerId, pushToken } = req.body;
+        console.log('📱 Register token request:', { ownerId, pushToken });
+        
         if (!ownerId || !pushToken) {
             return res.status(400).json({ error: 'Missing ownerId or pushToken' });
         }
-        // Store token in database or just acknowledge
-        // For now, just acknowledge receipt
+        
+        await prisma.deviceToken.upsert({
+            where: { ownerId },
+            update: { pushToken, updatedAt: new Date() },
+            create: { ownerId, pushToken },
+        });
+        
+        console.log('✅ Device token saved for user:', ownerId);
         res.json({ success: true, message: 'Token registered' });
     } catch (error) {
-        console.error('Error in /register-token:', error);
+        console.error('❌ Error in /register-token:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
